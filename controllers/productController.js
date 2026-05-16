@@ -731,6 +731,64 @@ const deleteProduct = async (req, res) => {
   }
 };
 
+const getPublicProducts = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      search = "",
+      category = "",
+      brand = "",
+      sortBy = "createdAt",
+      sortOrder = "desc",
+    } = req.query;
+
+    const query = { isActive: true };
+
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { genericName: { $regex: search, $options: "i" } },
+        { sku: { $regex: search, $options: "i" } },
+        { barcode: { $regex: search, $options: "i" } },
+        { brand: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    if (category) query.category = category;
+    if (brand) query.brand = brand;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const sort = {};
+    sort[sortBy] = sortOrder === "asc" ? 1 : -1;
+
+    const products = await Product.find(query)
+      .select("name genericName sku barcode brand category subCategory price stock unit mainImage isFeatured")
+      .sort(sort)
+      .skip(skip)
+      .limit(limitNum);
+
+    const total = await Product.countDocuments(query);
+
+    res.json({
+      products,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum),
+        hasMore: pageNum * limitNum < total,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching public products:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   getAllProducts,
   getExpiringProducts,
@@ -743,5 +801,6 @@ module.exports = {
   createProduct,
   updateProduct,
   deleteProduct,
+  getPublicProducts,
 };
 
