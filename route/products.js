@@ -8,6 +8,8 @@ const productController = require("../controllers/productController");
 // GET /api/products - Get all products with pagination, search, and filters
 router.get("/", auth, productController.getAllProducts);
 
+router.get("/all", productController.getAllProducts);
+
 // GET /api/products/alerts/expiring - Get products expiring soon (not yet expired)
 router.get("/alerts/expiring", auth, productController.getExpiringProducts);
 
@@ -42,23 +44,23 @@ router.post(
     if (err) {
       if (err instanceof multer.MulterError) {
         if (err.code === "LIMIT_FILE_SIZE") {
-          return res.status(400).json({ 
-            message: "Image file is too large. Maximum size is 5MB." 
+          return res.status(400).json({
+            message: "Image file is too large. Maximum size is 5MB.",
           });
         }
         if (err.code === "LIMIT_FILE_COUNT") {
-          return res.status(400).json({ 
-            message: "Too many files uploaded." 
+          return res.status(400).json({
+            message: "Too many files uploaded.",
           });
         }
       }
-      return res.status(400).json({ 
-        message: err.message || "File upload error" 
+      return res.status(400).json({
+        message: err.message || "File upload error",
       });
     }
     next();
   },
-  productController.createProduct
+  productController.createProduct,
 );
 
 // PUT /api/products/:id - Update product
@@ -69,7 +71,7 @@ router.put(
     { name: "mainImage", maxCount: 1 },
     { name: "featureImages", maxCount: 5 },
   ]),
-  productController.updateProduct
+  productController.updateProduct,
 );
 
 // DELETE /api/products/:id - Delete product (soft delete)
