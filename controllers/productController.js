@@ -766,7 +766,7 @@ const getPublicProducts = async (req, res) => {
     sort[sortBy] = sortOrder === "asc" ? 1 : -1;
 
     const products = await Product.find(query)
-      .select("name genericName sku barcode brand category subCategory price stock unit mainImage isFeatured")
+      .select("name genericName sku barcode brand category subCategory price stock unit mainImage isFeatured discountPrice discountPercentage")
       .sort(sort)
       .skip(skip)
       .limit(limitNum);
