@@ -41,7 +41,7 @@ const requestOtp = async (req, res) => {
       await sendSms(cleanPhone, `Your Bayajid Pharmacy verification code is ${code}. Valid for 5 minutes.`);
     } catch (smsError) {
       console.error("Failed to send OTP SMS:", smsError.message);
-      return res.status(502).json({ message: "Failed to send verification code. Please try again." });
+      return res.status(502).json({ message: `Failed to send verification code: ${smsError.message}` });
     }
 
     console.log(`✅ OTP sent to ${cleanPhone}`);
