@@ -34,6 +34,12 @@ const webOrderSchema = new mongoose.Schema(
     },
     notes: String,
     source: { type: String, default: "website" },
+    // Set when the order is confirmed - links to the Sale/stock deduction it produced
+    saleId: { type: mongoose.Schema.Types.ObjectId, ref: "Sale" },
+    confirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    confirmedAt: Date,
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    cancelledAt: Date,
   },
   { timestamps: true }
 );

@@ -22,7 +22,13 @@ router.get("/", auth, webOrderController.getAllWebOrders);
 // GET /api/web-orders/:id - Staff: view any website order
 router.get("/:id", auth, webOrderController.getWebOrderById);
 
-// PUT /api/web-orders/:id - Staff: edit order status/notes
+// PUT /api/web-orders/:id/confirm - Staff: confirm a pending order (deducts stock, creates a Sale)
+router.put("/:id/confirm", auth, webOrderController.confirmWebOrder);
+
+// PUT /api/web-orders/:id/cancel - Staff: cancel an order (restores stock if it was already confirmed)
+router.put("/:id/cancel", auth, webOrderController.cancelWebOrder);
+
+// PUT /api/web-orders/:id - Staff: edit order notes, or move between processing/completed
 router.put("/:id", auth, webOrderController.updateWebOrder);
 
 module.exports = router;

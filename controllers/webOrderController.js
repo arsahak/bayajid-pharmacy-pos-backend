@@ -1,6 +1,10 @@
 const jwt = require("jsonwebtoken");
 const WebOrder = require("../model/WebOrder");
 const Customer = require("../model/Customer");
+const Product = require("../model/Product");
+const Inventory = require("../model/Inventory");
+const Store = require("../model/Store");
+const Sale = require("../model/Sale");
 const { generateCustomerToken } = require("../midleware/customerAuth");
 const { sendSms } = require("../utils/sms");
 
@@ -13,6 +17,15 @@ const isPhoneVerified = (verificationToken, phone) => {
   } catch {
     return false;
   }
+};
+
+// Same flat-boolean permission pattern used across the other staff controllers
+const checkPermission = (user, permission, action = "perform this action") => {
+  if (user.role === "super_admin") return null;
+  if (!user.permissions || !user.permissions[permission]) {
+    return { status: 403, message: `You do not have permission to ${action}` };
+  }
+  return null;
 };
 
 /**
@@ -184,6 +197,11 @@ const getMyOrderById = async (req, res) => {
  */
 const getAllWebOrders = async (req, res) => {
   try {
+    const permissionError = checkPermission(req.user, "canViewOrders", "view orders");
+    if (permissionError) {
+      return res.status(permissionError.status).json({ message: permissionError.message });
+    }
+
     const { status, search, page = 1, limit = 20 } = req.query;
     const query = {};
 
@@ -223,6 +241,11 @@ const getAllWebOrders = async (req, res) => {
  */
 const getWebOrderById = async (req, res) => {
   try {
+    const permissionError = checkPermission(req.user, "canViewOrders", "view orders");
+    if (permissionError) {
+      return res.status(permissionError.status).json({ message: permissionError.message });
+    }
+
     const order = await WebOrder.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
@@ -235,14 +258,27 @@ const getWebOrderById = async (req, res) => {
 };
 
 /**
- * Staff (admin): edit an order's status/notes.
+ * Staff (admin): edit an order's notes, or move it between the non-stock-affecting
+ * statuses (processing/completed). Use /confirm and /cancel for pending<->confirmed
+ * transitions - those are the ones that touch stock and sales.
  */
 const updateWebOrder = async (req, res) => {
   try {
-    const allowedFields = ["status", "notes"];
+    const permissionError = checkPermission(req.user, "canEditOrders", "edit orders");
+    if (permissionError) {
+      return res.status(permissionError.status).json({ message: permissionError.message });
+    }
+
+    const allowedStatuses = ["processing", "completed"];
     const updates = {};
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    if (req.body.notes !== undefined) updates.notes = req.body.notes;
+    if (req.body.status !== undefined) {
+      if (!allowedStatuses.includes(req.body.status)) {
+        return res.status(400).json({
+          message: `Use /confirm or /cancel to set that status. This endpoint only allows: ${allowedStatuses.join(", ")}`,
+        });
+      }
+      updates.status = req.body.status;
     }
 
     const order = await WebOrder.findByIdAndUpdate(req.params.id, updates, {
@@ -262,6 +298,190 @@ const updateWebOrder = async (req, res) => {
   }
 };
 
+/**
+ * Staff (admin): confirm a pending order.
+ * Deducts stock/inventory for each item and creates a "due" Sale record
+ * (payment collected on pickup/delivery, matching the POS due-sale flow),
+ * all inside a transaction so a partial failure can't leave stock inconsistent.
+ */
+const confirmWebOrder = async (req, res) => {
+  const permissionError = checkPermission(req.user, "canApproveOrders", "confirm orders");
+  if (permissionError) {
+    return res.status(permissionError.status).json({ message: permissionError.message });
+  }
+
+  const session = await WebOrder.startSession();
+  session.startTransaction();
+
+  try {
+    const order = await WebOrder.findById(req.params.id).session(session);
+    if (!order) {
+      throw Object.assign(new Error("Order not found"), { status: 404 });
+    }
+    if (order.status !== "pending") {
+      throw Object.assign(new Error(`Only pending orders can be confirmed (current status: ${order.status})`), {
+        status: 400,
+      });
+    }
+
+    const store = await Store.findOne({ isActive: true }).session(session);
+    if (!store) {
+      throw Object.assign(new Error("No active store found to attribute this sale to"), { status: 400 });
+    }
+
+    const saleItems = [];
+    for (const item of order.items) {
+      if (!item.productId) {
+        // Item wasn't linked to a real product record - skip stock/sale line, keep the order data as-is
+        continue;
+      }
+
+      const product = await Product.findById(item.productId).session(session);
+      if (!product) {
+        throw Object.assign(new Error(`Product not found for order item "${item.name}"`), { status: 400 });
+      }
+      if (product.stock < item.quantity) {
+        throw Object.assign(
+          new Error(`Insufficient stock for ${product.name}. Available: ${product.stock}, Required: ${item.quantity}`),
+          { status: 400 }
+        );
+      }
+
+      product.stock -= item.quantity;
+      await product.save({ session });
+
+      const inventory = await Inventory.findOne({ productId: item.productId, storeId: store._id }).session(session);
+      if (inventory) {
+        if (inventory.quantity < item.quantity) {
+          throw Object.assign(new Error(`Insufficient inventory for ${product.name}`), { status: 400 });
+        }
+        inventory.quantity -= item.quantity;
+        await inventory.save({ session });
+      }
+
+      saleItems.push({
+        productId: item.productId,
+        productName: item.name,
+        quantity: item.quantity,
+        unitPrice: item.price,
+        discount: 0,
+        tax: 0,
+        total: item.subtotal,
+      });
+    }
+
+    const saleCount = await Sale.countDocuments();
+    const saleNo = `SALE-WEB-${Date.now()}-${saleCount}`;
+
+    const [sale] = await Sale.create(
+      [
+        {
+          storeId: store._id,
+          saleNo,
+          items: saleItems,
+          subtotal: order.subtotal,
+          discount: order.discountTotal || 0,
+          tax: 0,
+          total: order.total,
+          payments: [{ method: "due", amount: 0 }],
+          customerId: order.customerId,
+          cashierId: req.userId,
+          status: "due",
+          dueAmount: order.total,
+          notes: `Auto-created from website order ${order.orderNo}`,
+        },
+      ],
+      { session }
+    );
+
+    order.status = "confirmed";
+    order.saleId = sale._id;
+    order.confirmedBy = req.userId;
+    order.confirmedAt = new Date();
+    await order.save({ session });
+
+    await session.commitTransaction();
+
+    console.log(`✅ Web order confirmed: ${order.orderNo} -> sale ${sale.saleNo}, stock deducted`);
+    res.json({ order, sale });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Error confirming web order:", error.message);
+    res.status(error.status || 500).json({ message: error.message });
+  } finally {
+    session.endSession();
+  }
+};
+
+/**
+ * Staff (admin): cancel an order.
+ * A still-pending order cancels with no side effects. A confirmed/processing
+ * order (stock already deducted) has its stock restored and its Sale marked refunded.
+ */
+const cancelWebOrder = async (req, res) => {
+  const permissionError = checkPermission(req.user, "canCancelOrders", "cancel orders");
+  if (permissionError) {
+    return res.status(permissionError.status).json({ message: permissionError.message });
+  }
+
+  const session = await WebOrder.startSession();
+  session.startTransaction();
+
+  try {
+    const order = await WebOrder.findById(req.params.id).session(session);
+    if (!order) {
+      throw Object.assign(new Error("Order not found"), { status: 404 });
+    }
+    if (["completed", "cancelled"].includes(order.status)) {
+      throw Object.assign(new Error(`Cannot cancel an order that is already ${order.status}`), { status: 400 });
+    }
+
+    const hadStockDeducted = order.status === "confirmed" || order.status === "processing";
+
+    if (hadStockDeducted) {
+      const store = await Store.findOne({ isActive: true }).session(session);
+
+      for (const item of order.items) {
+        if (!item.productId) continue;
+
+        const product = await Product.findById(item.productId).session(session);
+        if (product) {
+          product.stock += item.quantity;
+          await product.save({ session });
+        }
+
+        if (store) {
+          const inventory = await Inventory.findOne({ productId: item.productId, storeId: store._id }).session(session);
+          if (inventory) {
+            inventory.quantity += item.quantity;
+            await inventory.save({ session });
+          }
+        }
+      }
+
+      if (order.saleId) {
+        await Sale.findByIdAndUpdate(order.saleId, { status: "refunded" }, { session });
+      }
+    }
+
+    order.status = "cancelled";
+    order.cancelledBy = req.userId;
+    order.cancelledAt = new Date();
+    await order.save({ session });
+
+    await session.commitTransaction();
+
+    console.log(`✅ Web order cancelled: ${order.orderNo}${hadStockDeducted ? " (stock restored)" : ""}`);
+    res.json({ order });
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Error cancelling web order:", error.message);
+    res.status(error.status || 500).json({ message: error.message });
+  } finally {
+    session.endSession();
+  }
+};
+
 module.exports = {
   createWebOrder,
   requestToken,
@@ -270,4 +490,6 @@ module.exports = {
   getAllWebOrders,
   getWebOrderById,
   updateWebOrder,
+  confirmWebOrder,
+  cancelWebOrder,
 };
