@@ -5,10 +5,12 @@ const storage = multer.memoryStorage();
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(file.originalname.split(".").pop().toLowerCase());
+    const extname = allowedTypes.test(
+      file.originalname.split(".").pop().toLowerCase(),
+    );
     const mimetype = allowedTypes.test(file.mimetype);
 
     if (mimetype && extname) {
@@ -20,4 +22,3 @@ const upload = multer({
 });
 
 module.exports = upload;
-
