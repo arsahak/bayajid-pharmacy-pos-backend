@@ -40,10 +40,14 @@ const createWebOrder = async (req, res) => {
       return res.status(401).json({ message: "Phone verification required or expired. Please verify again." });
     }
 
-    // Find or create the customer account for this phone number
+    // Find or create the customer account for this phone number.
+    // A verified order also reactivates a previously soft-deleted customer -
+    // otherwise they'd get a token from a customer record that customerAuth
+    // rejects as inactive on the very next request.
     let customer = await Customer.findOne({ phone: cleanPhone });
     if (customer) {
       customer.name = name;
+      customer.isActive = true;
       customer.set("address.street", address);
       await customer.save();
     } else {
@@ -52,6 +56,7 @@ const createWebOrder = async (req, res) => {
         phone: cleanPhone,
         address: { street: address },
         membershipType: "regular",
+        isActive: true,
       });
       console.log(`✅ Customer account created: ${customer.name} (${customer.phone})`);
     }
