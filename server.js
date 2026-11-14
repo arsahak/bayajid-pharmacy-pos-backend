@@ -139,6 +139,12 @@ app.use("/api/brands", (req, res, next) => {
 // Serve static files from uploads directory
 app.use("/uploads", express.static("uploads"));
 
+// Product/category/user images: API responses point ImgBB images at /img/...webp,
+// which converts them to WebP with sharp (enabled when IMAGE_PROXY_BASE is set)
+const webpImage = require("./utils/webpImage");
+if (webpImage.enabled) app.set("json replacer", webpImage.jsonReplacer);
+app.get("/img/ibb/:id/:file", webpImage.serveIbbImage);
+
 // Rate limiting - Increased for POS system that makes multiple API calls
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
