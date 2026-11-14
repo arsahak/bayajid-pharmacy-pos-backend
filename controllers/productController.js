@@ -1,4 +1,5 @@
 const Product = require("../model/Product");
+const posCatalog = require("../utils/posCatalog");
 const { uploadToImageBB } = require("../utils/imagebb");
 
 /**
@@ -131,6 +132,26 @@ const POS_FIELDS =
   "name price cost discountPrice discountPercentage category stock sku barcode " +
   "isPrescription isControlled genericName dosage strength unit manufacturer " +
   "hasExpiry expiryDate batchNumber taxRate reorderLevel mainImage location";
+
+/**
+ * GET /api/products/pos-catalog?since=<serverTime of last sync>
+ * POS catalogue from the in-memory cache. Without `since` (or if it is too
+ * old) returns the full list; otherwise only changed / removed products.
+ */
+const getPosCatalog = async (req, res) => {
+  try {
+    const permissionError = checkPermission(req.user, "canViewProducts", "view products");
+    if (permissionError) {
+      return res.status(permissionError.status).json({ message: permissionError.message });
+    }
+    const data = await posCatalog.getCatalog(req.query.since);
+    res.set("Cache-Control", "no-store");
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching POS catalogue:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
 
 const getAllProducts = async (req, res) => {
   try {
@@ -825,6 +846,7 @@ const getPublicProducts = async (req, res) => {
 };
 
 module.exports = {
+  getPosCatalog,
   getAllProducts,
   getExpiringProducts,
   getExpiredProducts,

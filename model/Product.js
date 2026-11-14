@@ -402,4 +402,14 @@ productSchema.methods.canBeManaged = function(user) {
 productSchema.set('toJSON', { virtuals: true });
 productSchema.set('toObject', { virtuals: true });
 
+// Tell the POS catalogue cache and connected POS screens that products changed
+// (covers sales, stock adjustments, web orders, edits, imports and deletes)
+const notifyProductChange = () => require('../utils/productEvents').changed();
+productSchema.post('save', notifyProductChange);
+productSchema.post('insertMany', notifyProductChange);
+productSchema.post(
+  ['findOneAndUpdate', 'updateOne', 'updateMany', 'findOneAndDelete', 'deleteOne', 'deleteMany'],
+  notifyProductChange
+);
+
 module.exports = mongoose.model('Product', productSchema);

@@ -10,6 +10,9 @@ router.get("/", auth, productController.getAllProducts);
 
 router.get("/all", productController.getPublicProducts);
 
+// GET /api/products/pos-catalog - POS catalogue (cached, incremental with ?since=)
+router.get("/pos-catalog", auth, productController.getPosCatalog);
+
 // GET /api/products/alerts/expiring - Get products expiring soon (not yet expired)
 router.get("/alerts/expiring", auth, productController.getExpiringProducts);
 

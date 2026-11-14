@@ -78,11 +78,8 @@ const io = socketIo(server, {
     methods: ["GET", "POST"],
     credentials: true,
   },
-  // Additional config for serverless
-  transports:
-    process.env.NODE_ENV === "production"
-      ? ["polling"]
-      : ["websocket", "polling"],
+  // Vercel serverless can't hold WebSockets; a normal server (VPS/PM2) can
+  transports: process.env.VERCEL ? ["polling"] : ["websocket", "polling"],
 });
 
 // Connect to MongoDB
@@ -240,6 +237,10 @@ io.on("connection", (socket) => {
 
 // Attach io to app for use in routes
 app.set("io", io);
+
+// POS: push "products:changed" to connected screens, and preload the catalogue
+require("./utils/productEvents").setIo(io);
+if (!process.env.VERCEL) require("./utils/posCatalog").warmUp();
 
 // Error handling middleware
 app.use((err, req, res, next) => {
