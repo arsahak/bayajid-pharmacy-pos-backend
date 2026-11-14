@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../model/User');
 const Role = require('../model/Role');
+const userCache = require('../utils/userCache');
 
 const auth = async (req, res, next) => {
   try {
@@ -13,9 +14,13 @@ const auth = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    const user = await User.findById(decoded.userId)
-      .select('-password')
-      .populate('roleId', 'permissions');
+    let user = userCache.get(decoded.userId);
+    if (!user) {
+      user = await User.findById(decoded.userId)
+        .select('-password')
+        .populate('roleId', 'permissions');
+      if (user) userCache.set(decoded.userId, user);
+    }
     
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'User not found or inactive' });

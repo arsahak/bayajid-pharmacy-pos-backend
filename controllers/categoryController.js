@@ -102,32 +102,28 @@ const getAllCategories = async (req, res) => {
     const sort = {};
     sort[sortBy] = sortOrder === "asc" ? 1 : -1;
 
-    // Execute query
-    const categories = await Category.find(query)
-      .populate("parentCategory", "name slug")
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .sort(sort)
-      .skip(skip)
-      .limit(limitNum);
+    // Execute query, total count and product counts in parallel
+    const [categories, total, countRows] = await Promise.all([
+      Category.find(query)
+        .populate("parentCategory", "name slug")
+        .populate("createdBy", "name email")
+        .populate("updatedBy", "name email")
+        .sort(sort)
+        .skip(skip)
+        .limit(limitNum),
+      Category.countDocuments(query),
+      // Product counts for all categories in ONE query (was one query per category)
+      Product.aggregate([
+        { $match: { isActive: true } },
+        { $group: { _id: "$category", count: { $sum: 1 } } },
+      ]),
+    ]);
+    const countByName = new Map(countRows.map((r) => [r._id, r.count]));
 
-    // Get product count for each category
-    const categoriesWithCount = await Promise.all(
-      categories.map(async (category) => {
-        const productCount = await Product.countDocuments({
-          category: category.name,
-          isActive: true,
-        });
-
-        return {
-          ...category.toObject(),
-          productCount,
-        };
-      })
-    );
-
-    // Get total count
-    const total = await Category.countDocuments(query);
+    const categoriesWithCount = categories.map((category) => ({
+      ...category.toObject(),
+      productCount: countByName.get(category.name) || 0,
+    }));
 
     res.json({
       categories: categoriesWithCount,

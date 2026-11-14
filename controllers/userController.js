@@ -1,4 +1,5 @@
 const User = require("../model/User");
+const userCache = require("../utils/userCache");
 const { uploadToImageBB } = require("../utils/imagebb");
 
 /**
@@ -246,6 +247,7 @@ const updateUser = async (req, res) => {
       }
     }
 
+    userCache.clear();
     const user = await User.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
       runValidators: true,
@@ -272,6 +274,7 @@ const updateUser = async (req, res) => {
  */
 const deleteUser = async (req, res) => {
   try {
+    userCache.clear();
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { isActive: false },

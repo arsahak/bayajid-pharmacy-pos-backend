@@ -1,4 +1,5 @@
 const Role = require("../model/Role");
+const userCache = require("../utils/userCache");
 
 /**
  * Get all roles
@@ -45,6 +46,7 @@ const createRole = async (req, res) => {
  */
 const updateRole = async (req, res) => {
   try {
+    userCache.clear();
     const role = await Role.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
@@ -63,6 +65,7 @@ const updateRole = async (req, res) => {
  */
 const deleteRole = async (req, res) => {
   try {
+    userCache.clear();
     const role = await Role.findByIdAndUpdate(
       req.params.id,
       { isActive: false },

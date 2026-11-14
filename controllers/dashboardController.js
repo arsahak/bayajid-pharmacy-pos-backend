@@ -230,9 +230,10 @@ const getDashboardOverview = async (req, res) => {
       },
     ];
 
-    const [cogsResult, prevCogsResult] = await Promise.all([
+    const [cogsResult, prevCogsResult, customerAnalytics] = await Promise.all([
       Sale.aggregate(buildCogsPipeline(aggCurrentQuery)),
       Sale.aggregate(buildCogsPipeline(aggPrevQuery)),
+      getCustomerAnalytics(currentQuery, prevQuery),
     ]);
 
     // Guard against any unexpected negative result
@@ -251,8 +252,6 @@ const getDashboardOverview = async (req, res) => {
     const totalPaymentReturns = totalSalesReturn;
     const prevTotalPaymentReturns = prevTotalSalesReturn;
 
-    // Customer analytics
-    const customerAnalytics = await getCustomerAnalytics(currentQuery, prevQuery);
 
     // Format response
     const overview = {
@@ -400,7 +399,7 @@ const getDashboardStats = async (req, res) => {
     const aggQuery = { ...aggBase, createdAt: { $gte: startDate, $lte: endDate } };
 
     // Sales by day
-    const salesByDay = await Sale.aggregate([
+    const salesByDayPromise = Sale.aggregate([
       { $match: aggQuery },
       {
         $group: {
@@ -415,7 +414,7 @@ const getDashboardStats = async (req, res) => {
     ]);
 
     // Real purchase data from SourcedItem model (grouped by day)
-    const purchaseByDay = await SourcedItem.aggregate([
+    const purchaseByDayPromise = SourcedItem.aggregate([
       {
         $match: {
           ...aggBase,
@@ -436,28 +435,8 @@ const getDashboardStats = async (req, res) => {
       { $sort: { _id: 1 } },
     ]);
 
-    // Combine sales and purchases by day (fill gaps where one has data but not the other)
-    const allDates = [
-      ...new Set([
-        ...salesByDay.map((d) => d._id),
-        ...purchaseByDay.map((d) => d._id),
-      ]),
-    ].sort();
-
-    const salesAndPurchaseByDay = allDates.map((date) => {
-      const sale = salesByDay.find((d) => d._id === date);
-      const purchase = purchaseByDay.find((d) => d._id === date);
-      return {
-        date,
-        sales: sale?.sales || 0,
-        purchases: purchase?.purchases || 0,
-        salesCount: sale?.count || 0,
-        purchaseCount: purchase?.count || 0,
-      };
-    });
-
     // Sales by payment method
-    const salesByPaymentMethod = await Sale.aggregate([
+    const salesByPaymentMethodPromise = Sale.aggregate([
       { $match: aggQuery },
       { $unwind: "$payments" },
       {
@@ -470,7 +449,7 @@ const getDashboardStats = async (req, res) => {
     ]);
 
     // Customer analytics by day for customer overview chart
-    const customersByDay = await Sale.aggregate([
+    const customersByDayPromise = Sale.aggregate([
       {
         $match: {
           ...aggQuery,
@@ -497,7 +476,7 @@ const getDashboardStats = async (req, res) => {
     ]);
 
     // Total customers by day (including repeats)
-    const totalCustomersByDay = await Sale.aggregate([
+    const totalCustomersByDayPromise = Sale.aggregate([
       {
         $match: {
           ...aggQuery,
@@ -514,6 +493,36 @@ const getDashboardStats = async (req, res) => {
       },
       { $sort: { _id: 1 } },
     ]);
+
+    // All five aggregations above are independent: run them in parallel
+    const [salesByDay, purchaseByDay, salesByPaymentMethod, customersByDay, totalCustomersByDay] =
+      await Promise.all([
+        salesByDayPromise,
+        purchaseByDayPromise,
+        salesByPaymentMethodPromise,
+        customersByDayPromise,
+        totalCustomersByDayPromise,
+      ]);
+
+    // Combine sales and purchases by day (fill gaps where one has data but not the other)
+    const allDates = [
+      ...new Set([
+        ...salesByDay.map((d) => d._id),
+        ...purchaseByDay.map((d) => d._id),
+      ]),
+    ].sort();
+
+    const salesAndPurchaseByDay = allDates.map((date) => {
+      const sale = salesByDay.find((d) => d._id === date);
+      const purchase = purchaseByDay.find((d) => d._id === date);
+      return {
+        date,
+        sales: sale?.sales || 0,
+        purchases: purchase?.purchases || 0,
+        salesCount: sale?.count || 0,
+        purchaseCount: purchase?.count || 0,
+      };
+    });
 
     // Combine customer data
     const customerOverviewByDay = customersByDay.map((day) => {
@@ -562,15 +571,16 @@ function getTrend(current, previous, inverse = false) {
 async function getCustomerAnalytics(currentQuery, prevQuery) {
   try {
     // Get customers who made purchases in current period
-    const currentCustomerIds = await Sale.distinct("customerId", {
-      ...currentQuery,
-      customerId: { $exists: true, $ne: null },
-    });
-
-    const prevCustomerIds = await Sale.distinct("customerId", {
-      ...prevQuery,
-      customerId: { $exists: true, $ne: null },
-    });
+    const [currentCustomerIds, prevCustomerIds] = await Promise.all([
+      Sale.distinct("customerId", {
+        ...currentQuery,
+        customerId: { $exists: true, $ne: null },
+      }),
+      Sale.distinct("customerId", {
+        ...prevQuery,
+        customerId: { $exists: true, $ne: null },
+      }),
+    ]);
 
     // Find new customers (in current but not in previous)
     const newCustomerIds = currentCustomerIds.filter(

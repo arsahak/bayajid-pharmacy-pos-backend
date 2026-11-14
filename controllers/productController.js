@@ -126,6 +126,12 @@ const uploadImages = async (files) => {
 /**
  * Get all products with pagination, search, and filters
  */
+// Fields used by the dashboard POS screen (PointOFSaleDetilasPage)
+const POS_FIELDS =
+  "name price cost discountPrice discountPercentage category stock sku barcode " +
+  "isPrescription isControlled genericName dosage strength unit manufacturer " +
+  "hasExpiry expiryDate batchNumber taxRate reorderLevel mainImage location";
+
 const getAllProducts = async (req, res) => {
   try {
     const permissionError = checkPermission(req.user, "canViewProducts", "view products");
@@ -220,18 +226,25 @@ const getAllProducts = async (req, res) => {
     const sort = {};
     sort[sortBy] = sortOrder === "asc" ? 1 : -1;
 
-    // Execute query
-    const products = await Product.find(query)
-      .populate("createdBy", "name email")
-      .populate("updatedBy", "name email")
-      .populate("storeId", "name address")
-      .populate("suppliers", "name company phone email")
-      .sort(sort)
-      .skip(skip)
-      .limit(limitNum);
+    // ?view=pos → only the fields the POS screen uses, no populates, plain
+    // objects. Much smaller and faster when loading the whole catalogue.
+    const productQuery =
+      req.query.view === "pos"
+        ? Product.find(query).select(POS_FIELDS).lean()
+        : Product.find(query)
+            .populate("createdBy", "name email")
+            .populate("updatedBy", "name email")
+            .populate("storeId", "name address")
+            .populate("suppliers", "name company phone email");
 
-    // Get total count
-    const total = await Product.countDocuments(query);
+    // Execute query + total count in parallel (saves one DB round trip)
+    const [products, total] = await Promise.all([
+      productQuery
+        .sort(sort)
+        .skip(skip)
+        .limit(limitNum),
+      Product.countDocuments(query),
+    ]);
 
     res.json({
       products,
@@ -269,10 +282,18 @@ const getExpiringProducts = async (req, res) => {
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + parseInt(days));
 
-    const expiringProducts = await Product.find({
+    const expiringQuery = {
       isActive: true,
       expiryDate: { $exists: true, $ne: null, $gte: todayStart, $lte: futureDate },
-    })
+    };
+
+    // ?countOnly=true → just the number (used for badges), no product list
+    if (req.query.countOnly === "true") {
+      const count = await Product.countDocuments(expiringQuery);
+      return res.json({ products: [], count, alertDays: parseInt(days) });
+    }
+
+    const expiringProducts = await Product.find(expiringQuery)
       .populate("createdBy", "name email")
       .sort({ expiryDate: 1 });
 
@@ -300,10 +321,17 @@ const getExpiredProducts = async (req, res) => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    const expiredProducts = await Product.find({
+    const expiredQuery = {
       isActive: true,
       expiryDate: { $exists: true, $ne: null, $lt: todayStart },
-    })
+    };
+
+    if (req.query.countOnly === "true") {
+      const count = await Product.countDocuments(expiredQuery);
+      return res.json({ products: [], count });
+    }
+
+    const expiredProducts = await Product.find(expiredQuery)
       .populate("createdBy", "name email")
       .sort({ expiryDate: -1 });
 
@@ -327,10 +355,17 @@ const getLowStockProducts = async (req, res) => {
       return res.status(permissionError.status).json({ message: permissionError.message });
     }
 
-    const lowStockProducts = await Product.find({
+    const lowStockQuery = {
       isActive: true,
       $expr: { $lte: ["$stock", "$reorderLevel"] },
-    })
+    };
+
+    if (req.query.countOnly === "true") {
+      const count = await Product.countDocuments(lowStockQuery);
+      return res.json({ products: [], count });
+    }
+
+    const lowStockProducts = await Product.find(lowStockQuery)
       .populate("createdBy", "name email")
       .sort({ stock: 1 });
 

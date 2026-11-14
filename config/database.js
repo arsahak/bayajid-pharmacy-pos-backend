@@ -17,12 +17,15 @@ const connectDB = async () => {
     }
 
     const conn = await mongoose.connect(process.env.MONGO_URI, {
-      // Optimized for serverless/Vercel deployment
       serverSelectionTimeoutMS: 10000, // Timeout after 10s
-      socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
-      maxPoolSize: 10, // Maintain up to 10 socket connections
-      minPoolSize: 1, // Maintain at least 1 connection
-      maxIdleTimeMS: 10000, // Close connections after 10s of inactivity
+      socketTimeoutMS: 45000, // Fail an operation if the socket is silent for 45s
+      // Long-running server (PM2): the DB is far away (~130 ms per round trip)
+      // and opening a new TLS connection costs 1-2 s, so keep warm connections
+      // open and allow enough parallel queries (dashboard overview runs ~18 at once).
+      // On Vercel (serverless) keep the old small pool that closes quickly.
+      maxPoolSize: process.env.VERCEL ? 10 : 30,
+      minPoolSize: process.env.VERCEL ? 1 : 5,
+      maxIdleTimeMS: process.env.VERCEL ? 10000 : 0, // 0 = never close idle connections
     });
 
     isConnected = true;
