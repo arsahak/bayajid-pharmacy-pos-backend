@@ -249,9 +249,9 @@ app.use((req, res) => {
   res.status(404).json({ message: "Route not found" });
 });
 
-// For Vercel deployment, export the app
-// For local development, start the server
-if (process.env.NODE_ENV !== "production" && require.main === module) {
+// On Vercel the platform runs the exported app (VERCEL is set there).
+// Everywhere else (local dev, VPS with PM2) start the HTTP + Socket.IO server.
+if (!process.env.VERCEL && require.main === module) {
   const PORT = process.env.PORT || 8000;
   server.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
