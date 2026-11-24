@@ -41,6 +41,15 @@ const customerSchema = new mongoose.Schema({
   lastVisit: Date,
   notes: String,
   tags: [String],
+  // Prescription images, hosted on ImgBB
+  prescriptions: [{
+    url: { type: String, required: true },
+    thumbUrl: String,
+    fileName: String,
+    mimeType: String,
+    size: Number,
+    uploadedAt: { type: Date, default: Date.now }
+  }],
   isActive: {
     type: Boolean,
     default: true

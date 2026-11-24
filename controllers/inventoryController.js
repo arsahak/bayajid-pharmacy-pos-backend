@@ -152,13 +152,31 @@ const getInventoryStats = async (req, res) => {
  */
 const adjustInventory = async (req, res) => {
   try {
-    const { productId, storeId, adjustment, reason, location, minStock, maxStock } = req.body;
+    const { productId, storeId, adjustment, reason, location, minStock, maxStock, expiryDate } = req.body;
 
     // Validation
     if (!productId || !storeId || adjustment === undefined) {
       return res.status(400).json({
         message: "Product ID, Store ID, and adjustment quantity are required",
       });
+    }
+
+    // Expiry date (optional) is only taken when stock is added: it becomes the
+    // product's expiry date (the new batch's expiry).
+    let newExpiryDate = null;
+    if (expiryDate) {
+      if (!(adjustment > 0)) {
+        return res.status(400).json({ message: "Expiry date can only be set when adding stock" });
+      }
+      newExpiryDate = new Date(expiryDate);
+      if (Number.isNaN(newExpiryDate.getTime())) {
+        return res.status(400).json({ message: "Invalid expiry date" });
+      }
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      if (newExpiryDate < todayStart) {
+        return res.status(400).json({ message: "Expiry date cannot be in the past" });
+      }
     }
 
     // Find or create inventory entry
@@ -190,6 +208,10 @@ const adjustInventory = async (req, res) => {
     const product = await Product.findById(productId);
     if (product && product.stock !== undefined) {
       product.stock = Math.max(0, product.stock + adjustment);
+      if (newExpiryDate) {
+        product.expiryDate = newExpiryDate;
+        product.hasExpiry = true;
+      }
       await product.save();
     }
 
@@ -201,6 +223,7 @@ const adjustInventory = async (req, res) => {
       message: `Inventory adjusted successfully (${adjustment > 0 ? "+" : ""}${adjustment})`,
       inventory: populatedInventory,
       reason,
+      expiryDate: newExpiryDate,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });

@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { auth } = require("../midleware/auth");
 const customerController = require("../controllers/customerController");
+const { uploadPrescriptionFiles } = require("../midleware/prescriptionUpload");
 
 // GET /api/customers - Get all customers with search and filter
 router.get("/", auth, customerController.getAllCustomers);
@@ -11,6 +12,10 @@ router.get("/phone/:phone", auth, customerController.getCustomerByPhone);
 
 // GET /api/customers/:id - Get customer by ID
 router.get("/:id", auth, customerController.getCustomerById);
+
+// POST /api/customers/prescriptions - Upload prescription images to ImgBB
+// (multipart field "files"); returns the hosted file info to save on a customer
+router.post("/prescriptions", auth, uploadPrescriptionFiles, customerController.uploadPrescriptions);
 
 // POST /api/customers - Create new customer
 router.post("/", auth, customerController.createCustomer);

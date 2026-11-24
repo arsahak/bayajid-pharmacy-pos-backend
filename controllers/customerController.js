@@ -1,4 +1,75 @@
 const Customer = require("../model/Customer");
+const { uploadToImageBB } = require("../utils/imagebb");
+
+const IBB_URL_RE = /^https:\/\/i\.ibb\.co\/[A-Za-z0-9]{3,32}\/[^/?#\\]+$/;
+const PROXY_BASE = (process.env.IMAGE_PROXY_BASE || "").replace(/\/+$/, "");
+
+/**
+ * API responses may rewrite ImgBB URLs to the WebP proxy
+ * ("<IMAGE_PROXY_BASE>/img/ibb/<id>/<file>.webp"). When such a URL comes back
+ * in an update, store the original ImgBB URL again.
+ */
+function toOriginalIbbUrl(url) {
+  if (typeof url !== "string") return null;
+  if (IBB_URL_RE.test(url)) return url;
+  if (PROXY_BASE && url.startsWith(`${PROXY_BASE}/img/ibb/`)) {
+    const [id, file] = url.slice(`${PROXY_BASE}/img/ibb/`.length).split("/");
+    const original = `https://i.ibb.co/${id}/${(file || "").replace(/\.webp$/, "")}`;
+    if (IBB_URL_RE.test(original)) return original;
+  }
+  return null;
+}
+
+/** Keep only well-formed prescription entries that point at ImgBB */
+function sanitizePrescriptions(list) {
+  if (!Array.isArray(list)) return undefined;
+  return list
+    .map((item) => {
+      const url = toOriginalIbbUrl(item?.url);
+      if (!url) return null;
+      return {
+        url,
+        thumbUrl: toOriginalIbbUrl(item.thumbUrl) || undefined,
+        fileName: typeof item.fileName === "string" ? item.fileName.slice(0, 200) : undefined,
+        mimeType: typeof item.mimeType === "string" ? item.mimeType.slice(0, 100) : undefined,
+        size: Number.isFinite(Number(item.size)) ? Number(item.size) : undefined,
+        uploadedAt: item.uploadedAt ? new Date(item.uploadedAt) : new Date(),
+      };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Upload prescription images to ImgBB
+ * POST /api/customers/prescriptions  (multipart, field "files")
+ */
+const uploadPrescriptions = async (req, res) => {
+  try {
+    const files = req.files || [];
+    if (files.length === 0) {
+      return res.status(400).json({ message: "No prescription file uploaded" });
+    }
+
+    const uploaded = await Promise.all(
+      files.map(async (file) => {
+        const result = await uploadToImageBB(file.buffer, file.originalname);
+        return {
+          url: result.url,
+          thumbUrl: result.thumbUrl,
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          uploadedAt: new Date(),
+        };
+      })
+    );
+
+    res.status(201).json({ files: uploaded });
+  } catch (error) {
+    console.error("Error uploading prescriptions:", error);
+    res.status(500).json({ message: error.message || "Failed to upload prescription" });
+  }
+};
 
 /**
  * Get all customers with search and filter
@@ -103,6 +174,10 @@ const createCustomer = async (req, res) => {
       req.body.membershipType = "regular";
     }
 
+    if (req.body.prescriptions !== undefined) {
+      req.body.prescriptions = sanitizePrescriptions(req.body.prescriptions);
+    }
+
     const customer = new Customer(req.body);
     await customer.save();
 
@@ -120,6 +195,10 @@ const createCustomer = async (req, res) => {
  */
 const updateCustomer = async (req, res) => {
   try {
+    if (req.body.prescriptions !== undefined) {
+      req.body.prescriptions = sanitizePrescriptions(req.body.prescriptions);
+    }
+
     const customer = await Customer.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true,
@@ -169,5 +248,6 @@ module.exports = {
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  uploadPrescriptions,
 };
 

@@ -16,6 +16,53 @@ function calculateCheckDigit(barcode) {
 }
 
 /**
+ * Is this barcode already used — in the barcode list, or on a product
+ * other than `exceptProductId`?
+ */
+async function isBarcodeTaken(barcode, exceptProductId) {
+  const productQuery = { barcode };
+  if (exceptProductId) productQuery._id = { $ne: exceptProductId };
+  const [inList, onProduct] = await Promise.all([
+    Barcode.exists({ barcode }),
+    Product.exists(productQuery),
+  ]);
+  return !!(inList || onProduct);
+}
+
+/**
+ * Save `barcode` for `product`: adds it to the barcode list AND writes it to
+ * the product's own `barcode` field (the field POS scanning looks up).
+ * Any older barcode records of this product are removed, so a product has
+ * exactly one barcode.
+ */
+async function assignBarcodeToProduct({ product, barcode, type, notes, userId }) {
+  const newBarcode = await Barcode.create({
+    barcode,
+    productId: product._id,
+    type: type || "EAN13",
+    notes,
+    createdBy: userId,
+  });
+
+  try {
+    // updateOne (with timestamps) bumps updatedAt, so the POS catalogue cache picks it up
+    await Product.updateOne(
+      { _id: product._id },
+      { $set: { barcode, ...(userId ? { updatedBy: userId } : {}) } }
+    );
+  } catch (error) {
+    // Keep both places in sync: undo the list entry if the product could not be updated
+    await Barcode.deleteOne({ _id: newBarcode._id });
+    throw error;
+  }
+
+  // Drop this product's previous barcode records
+  await Barcode.deleteMany({ productId: product._id, _id: { $ne: newBarcode._id } });
+
+  return newBarcode;
+}
+
+/**
  * Generate unique EAN13 barcode
  */
 async function generateUniqueEAN13() {
@@ -36,9 +83,8 @@ async function generateUniqueEAN13() {
     const checkDigit = calculateCheckDigit(base);
     barcode = base + checkDigit;
 
-    // Check if barcode already exists
-    const existing = await Barcode.findOne({ barcode });
-    if (!existing) {
+    // Must not exist in the barcode list or on any product
+    if (!(await isBarcodeTaken(barcode))) {
       isUnique = true;
     }
 
@@ -58,22 +104,43 @@ async function generateUniqueEAN13() {
  */
 exports.generateBarcode = async (req, res) => {
   try {
-    const { productId } = req.body;
+    // replace: true = give a product that already has a barcode a new one
+    const { productId, replace = false } = req.body;
+
+    if (!productId) {
+      return res.status(400).json({ message: "Product ID is required" });
+    }
 
     // Validate product exists
-    const product = await Product.findById(productId);
+    const product = await Product.findById(productId).select("name barcode");
     if (!product) {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    // Generate unique barcode
-    const barcode = await generateUniqueEAN13();
+    if (product.barcode && !replace) {
+      return res.status(409).json({
+        message: `This product already has barcode ${product.barcode}`,
+        existingBarcode: product.barcode,
+      });
+    }
 
-    res.json({
+    // Generate a unique barcode and save it to the product straight away
+    const barcode = await generateUniqueEAN13();
+    const saved = await assignBarcodeToProduct({
+      product,
+      barcode,
+      type: "EAN13",
+      userId: req.user?._id,
+    });
+
+    res.status(201).json({
+      _id: saved._id,
       barcode,
       type: "EAN13",
       productId,
       productName: product.name,
+      previousBarcode: product.barcode || null,
+      saved: true,
     });
   } catch (error) {
     console.error("Generate barcode error:", error);
@@ -87,7 +154,7 @@ exports.generateBarcode = async (req, res) => {
  */
 exports.createBarcode = async (req, res) => {
   try {
-    const { barcode, productId, type, notes } = req.body;
+    const { barcode, productId, type, notes, replace = false } = req.body;
 
     // Validate required fields
     if (!barcode || !productId) {
@@ -100,25 +167,26 @@ exports.createBarcode = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    // Check if barcode already exists
-    const existingBarcode = await Barcode.findOne({ barcode });
-    if (existingBarcode) {
-      return res.status(400).json({
-        message: "Barcode already exists",
-        existingProduct: existingBarcode.productId,
+    // Check if barcode already exists (in the list or on another product)
+    if (await isBarcodeTaken(barcode, product._id)) {
+      return res.status(400).json({ message: "Barcode already exists" });
+    }
+
+    if (product.barcode && product.barcode !== barcode && !replace) {
+      return res.status(409).json({
+        message: `This product already has barcode ${product.barcode}`,
+        existingBarcode: product.barcode,
       });
     }
 
-    // Create barcode
-    const newBarcode = new Barcode({
+    // Save to the barcode list and to the product itself
+    const newBarcode = await assignBarcodeToProduct({
+      product,
       barcode,
-      productId,
-      type: type || "EAN13",
+      type,
       notes,
-      createdBy: req.user?._id,
+      userId: req.user?._id,
     });
-
-    await newBarcode.save();
 
     // Populate product details
     await newBarcode.populate("productId", "name sku price");
@@ -225,6 +293,12 @@ exports.deleteBarcode = async (req, res) => {
     }
 
     await Barcode.findByIdAndDelete(id);
+
+    // Remove it from the product too (only if the product still uses this barcode)
+    await Product.updateOne(
+      { _id: barcode.productId, barcode: barcode.barcode },
+      { $unset: { barcode: 1 } }
+    );
 
     res.json({ message: "Barcode deleted successfully" });
   } catch (error) {
